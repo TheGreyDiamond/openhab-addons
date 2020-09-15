@@ -46,6 +46,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import javax.measure.quantity.Temperature;
 
 import org.eclipse.smarthome.config.core.Configuration;
+import org.eclipse.smarthome.core.cache.ExpiringCache;
 import org.eclipse.smarthome.core.library.types.DecimalType;
 import org.eclipse.smarthome.core.library.types.OnOffType;
 import org.eclipse.smarthome.core.library.types.QuantityType;
@@ -164,6 +165,13 @@ public class MaxCubeBridgeHandler extends BaseBridgeHandler {
 
     private final Set<DeviceStatusListener> deviceStatusListeners = new CopyOnWriteArraySet<>();
 
+    private static final long CACHE_EXPIRY = TimeUnit.SECONDS.toMillis(10);
+    private final ExpiringCache<Boolean> refreshCache = new ExpiringCache<>(CACHE_EXPIRY, () -> {
+        logger.debug("Refreshing.");
+        refreshData();
+        return true;
+    });
+
     private ScheduledFuture<?> pollingJob;
     private Thread queueConsumerThread;
     private BackupState backup = BackupState.REQUESTED;
@@ -177,7 +185,7 @@ public class MaxCubeBridgeHandler extends BaseBridgeHandler {
     public void handleCommand(ChannelUID channelUID, Command command) {
         if (command instanceof RefreshType) {
             logger.debug("Refresh command received.");
-            refreshData();
+            refreshCache.getValue();
         } else {
             logger.warn("No bridge commands defined. Cannot process '{}'.", command);
         }
@@ -284,7 +292,6 @@ public class MaxCubeBridgeHandler extends BaseBridgeHandler {
         clearDeviceList();
         propertiesSet = false;
         roomPropertiesSet = false;
-
     }
 
     public void cubeReboot() {
@@ -374,7 +381,7 @@ public class MaxCubeBridgeHandler extends BaseBridgeHandler {
                             logger.debug("Error sending command {} to MAX! Cube at IP: {}", sendCommand, ipAddress);
                         }
                     }
-                    Thread.sleep(50);
+                    Thread.sleep(5000);
                 }
             } catch (InterruptedException e) {
                 logger.debug("Stopping queueConsumer");
@@ -566,7 +573,7 @@ public class MaxCubeBridgeHandler extends BaseBridgeHandler {
                 writer.write(command.getCommandString());
                 logger.trace("Write string to Max! Cube {}: {}", ipAddress, command.getCommandString());
                 writer.flush();
-                if (command.getReturnStrings() != null) {
+                if (!command.getReturnStrings().isEmpty()) {
                     readLines(command.getReturnStrings());
                 } else {
                     socketClose();
@@ -781,7 +788,7 @@ public class MaxCubeBridgeHandler extends BaseBridgeHandler {
     }
 
     private void processNMessage(NMessage nMessage) {
-        if (nMessage.getRfAddress() != null) {
+        if (!nMessage.getRfAddress().isEmpty()) {
             logger.debug("New {} found. Serial: {}, rfaddress: {}", nMessage.getDeviceType(),
                     nMessage.getSerialNumber(), nMessage.getRfAddress());
             // Send C command to get the configuration so it will be added to discovery
@@ -933,7 +940,7 @@ public class MaxCubeBridgeHandler extends BaseBridgeHandler {
      * Updates the room information by sending M command
      */
     public void sendDeviceAndRoomNameUpdate(String comment) {
-        if (devices.size() > 0) {
+        if (!devices.isEmpty()) {
             SendCommand sendCommand = new SendCommand("Cube(" + getThing().getUID().getId() + ")",
                     new MCommand(devices, rooms), comment);
             queueCommand(sendCommand);
@@ -973,7 +980,6 @@ public class MaxCubeBridgeHandler extends BaseBridgeHandler {
         }
         queueCommand(new SendCommand("Cube(" + getThing().getUID().getId() + ")", new FCommand(ntpServer1, ntpServer2),
                 "Update NTP info"));
-
     }
 
     private boolean socketConnect() throws UnknownHostException, IOException {
